@@ -1,0 +1,20 @@
+[package]
+name = "bluefan-rpc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rpc-server"
+path = "src/server.rs"
+
+[dependencies]
+bluefan-queue = { path = "../queue"}
+prost = "0.11.9"
+tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread"] }
+tonic = "0.9.2"
+env_logger = "0.10.0"
+log = "0.4.18"
+clap = { version = "4.3.0", features = ["derive"] }
+
+[build-dependencies]
+tonic-build = "0.9.2"
