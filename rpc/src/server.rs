@@ -13,10 +13,10 @@ use crate::protocol::bluefan_rpc::queue_server::QueueServer;
 use crate::protocol::QueueRpc;
 
 #[derive(Parser)]
-#[command(name = "Bluefan gRPC Server")]
+#[command(name = "Bluefan RPC Server")]
 #[command(author = "soda <projects@soda.zone>")]
 #[command(version = "1.0")]
-#[command(about = "gRPC server for Bluefan Work Queues", long_about = None)]
+#[command(about = "Bluefan RPC Work Queue Server", long_about = None)]
 #[command(next_line_help = true)]
 struct Cli {
 	/// Directory for the database
