@@ -1,4 +1,4 @@
-//! gRPC server protocol.
+//! gRPC server protocol implementation.
 use bluefan_queue::jobs::{Job, JobOptions};
 use bluefan_queue::RocksWorkQueueService;
 use tonic::{Request, Response, Status};
