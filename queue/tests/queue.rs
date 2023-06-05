@@ -12,7 +12,7 @@ use bluefan_queue::{
 use crossbeam::scope;
 use tempfile::tempdir;
 
-const Q1: &str = "1";
+const Q1: &str = "supercalifragilisticoespialidoso";
 
 #[test]
 fn basic_put_lease() {
