@@ -5,6 +5,7 @@ use std::{
 };
 
 use bluefan_queue::{
+	error::QError,
 	jobs::{Job, JobOptions, JobStatus},
 	RocksWorkQueue, RocksWorkQueueService,
 };
@@ -306,6 +307,44 @@ fn basic_sched_delay() {
 	let now = Instant::now();
 	assert!(now - start >= ms(450));
 	assert!(now - start <= ms(550));
+}
+
+#[test]
+fn long_queue_name() {
+	let wk = wk();
+
+	if let Err(error) =
+		wk.put("avrah kahdabra supercalifragilisticexpialidocious", &Job::default())
+	{
+		assert_eq!(
+			error,
+			QError::QueueError("the maximum queue name length is 32 bytes".into())
+		);
+	} else {
+		panic!()
+	}
+}
+
+#[test]
+fn concurrent_queue_creation() {
+	let wk = wk();
+
+	scope(|scope| {
+		for n in 0..100 {
+			let wk = wk.clone();
+			scope.spawn(move |_| {
+				assert!(wk.put(format!("qn:{}", n).as_str(), &Job::default()).is_ok());
+			});
+		}
+	})
+	.unwrap();
+
+	let wk = wk.clone();
+	for n in 0..100 {
+		assert_eq!(wk.queue_len(format!("qn:{}", n).as_str()), 1);
+	}
+
+	assert_eq!(wk.queue_len("qn:none"), 0);
 }
 
 fn ms(millis: u64) -> Duration {

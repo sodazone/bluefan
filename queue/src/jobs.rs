@@ -77,6 +77,8 @@ impl Default for JobState {
 	}
 }
 
+pub const QUEUE_NAME_LEN: usize = 32;
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct QueueName {
 	pub bytes: [u8; 32],

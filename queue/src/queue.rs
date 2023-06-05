@@ -50,8 +50,8 @@ use log::{debug, info, warn};
 
 use crate::{
 	backend::{self, WorkQueueBackend},
-	error::QResult,
-	jobs::{self, Job, JobStatus, QueueName},
+	error::{QError, QResult},
+	jobs::{self, Job, JobStatus, QueueName, QUEUE_NAME_LEN},
 	rocks::RocksBackend,
 	unix_millis, unix_secs,
 };
@@ -130,6 +130,13 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 		let options = job.options.clone();
 		let delay_ts =
 			if options.delay > 0 { unix_millis() + options.delay as u64 } else { 0 };
+
+		if queue_name.len() > QUEUE_NAME_LEN {
+			return Err(QError::QueueError(format!(
+				"the maximum queue name length is {} bytes",
+				QUEUE_NAME_LEN
+			)));
+		}
 
 		self.inner_put(
 			queue_name.into(),

@@ -3,7 +3,7 @@
 use std::fmt::{Display, Formatter, Result};
 pub type QResult<T> = std::result::Result<T, QError>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum QError {
 	StoreError(String),
 	QueueError(String),
