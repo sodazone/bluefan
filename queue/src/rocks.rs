@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::backend::{InnerWorkQueue, WorkQueueBackend};
 use crate::error::{QError, QResult};
-use crate::jobs::{Job, JobStatus};
+use crate::jobs::{Job, JobStatus, QueueName};
 use crate::unix_millis;
 
 const CF_WAIT: &str = "w";
@@ -69,10 +69,10 @@ impl RocksBackend {
 	fn get_job(
 		&self,
 		cf: &ColumnFamily,
-		queue_hash: u32,
+		queue_name: &QueueName,
 		job_id: u64,
 	) -> QResult<Option<Job>> {
-		match self.db.get_cf_opt(cf, JobKey::bytes_from(queue_hash, job_id), &self.readopts())
+		match self.db.get_cf_opt(cf, JobKey::bytes_from(queue_name, job_id), &self.readopts())
 		{
 			Ok(Some(bytes)) => Ok(Some(self.deserialize(&bytes))),
 			_ => Ok(None),
@@ -129,7 +129,7 @@ impl WorkQueueBackend for RocksBackend {
 
 			let ready_jobs = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
 			for (key, bytes) in ready_jobs.flatten() {
-				q.inner_put(JobKey::queue_hash_from_key(&key), self.deserialize(&bytes))?;
+				q.inner_put(JobKey::queue_name_from_key(&key), self.deserialize(&bytes))?;
 			}
 		} else {
 			info!("RocksDB: no waiting jobs to recover")
@@ -138,12 +138,12 @@ impl WorkQueueBackend for RocksBackend {
 		Ok(())
 	}
 
-	fn put_job(&self, queue_hash: u32, job: &Job) -> QResult<()> {
+	fn put_job(&self, queue_name: &QueueName, job: &Job) -> QResult<()> {
 		let job_id = job.id.unwrap();
-		let job_key = &JobKey::new(queue_hash, job_id);
+		let job_key = &JobKey::bytes_from(queue_name, job_id);
 
 		if job.options.delay > 0 {
-			let tkey = TimeKey::new(job.state.delay_ts, job_key);
+			let tkey = TimeKey::bytes_from(job.state.delay_ts, job_key);
 			let mut batch = WriteBatch::default();
 
 			batch.put_cf(self.cf_time_sched(), tkey, []);
@@ -157,16 +157,20 @@ impl WorkQueueBackend for RocksBackend {
 		Ok(())
 	}
 
-	fn claim_job(&self, queue_hash: u32, job: &Job) -> QResult<()> {
+	fn claim_job(&self, queue_name: &QueueName, job: &Job) -> QResult<()> {
 		let job_id = job.id.unwrap();
-		let job_key = &JobKey::new(queue_hash, job_id);
+		let job_key = &JobKey::bytes_from(queue_name, job_id);
 
 		let mut batch: rocksdb::WriteBatchWithTransaction<false> = WriteBatch::default();
 		batch.delete_cf(self.cf_wait(), job_key);
 		batch.put_cf(self.cf_run(), job_key, self.serialize(job));
 
 		if job.options.ttr > 0 {
-			batch.put_cf(self.cf_time_exp(), TimeKey::new(job.state.ttr_ts, job_key), CF_RUN);
+			batch.put_cf(
+				self.cf_time_exp(),
+				TimeKey::bytes_from(job.state.ttr_ts, job_key),
+				CF_RUN,
+			);
 		}
 
 		self.db.write(batch)?;
@@ -174,11 +178,11 @@ impl WorkQueueBackend for RocksBackend {
 		Ok(())
 	}
 
-	fn release_job(&self, queue_hash: u32, job_id: u64) -> QResult<Job> {
-		let job_key = &JobKey::new(queue_hash, job_id);
+	fn release_job(&self, queue_name: &QueueName, job_id: u64) -> QResult<Job> {
+		let job_key = &JobKey::bytes_from(queue_name, job_id);
 
 		if self.db.key_may_exist_cf(self.cf_run(), job_key) {
-			if let Ok(Some(mut job)) = self.get_job_running(queue_hash, job_id) {
+			if let Ok(Some(mut job)) = self.get_job_running(queue_name, job_id) {
 				let mut batch = WriteBatch::default();
 
 				job.state.status = JobStatus::WAIT;
@@ -186,7 +190,7 @@ impl WorkQueueBackend for RocksBackend {
 				if job.state.ttr_ts > 0 {
 					batch.delete_cf(
 						self.cf_time_exp(),
-						TimeKey::new(job.state.ttr_ts, job_key),
+						TimeKey::bytes_from(job.state.ttr_ts, job_key),
 					);
 				}
 
@@ -203,41 +207,41 @@ impl WorkQueueBackend for RocksBackend {
 		Err(QError::QueueError(String::from("unable to relase job")))
 	}
 
-	fn delete_job(&self, queue_hash: u32, job_id: u64) -> QResult<()> {
-		let job_key = &JobKey::new(queue_hash, job_id);
+	fn delete_job(&self, queue_name: &QueueName, job_id: u64) -> QResult<()> {
+		let job_key = &JobKey::bytes_from(queue_name, job_id);
 
 		if self.db.key_may_exist_cf(self.cf_run(), job_key) {
-			if let Ok(Some(job)) = self.get_job_running(queue_hash, job_id) {
+			if let Ok(Some(job)) = self.get_job_running(queue_name, job_id) {
 				let mut batch = WriteBatch::default();
 				batch.delete_cf(self.cf_run(), job_key);
 				if job.state.ttr_ts > 0 {
 					batch.delete_cf(
 						self.cf_time_exp(),
-						TimeKey::new(job.state.ttr_ts, job_key),
+						TimeKey::bytes_from(job.state.ttr_ts, job_key),
 					);
 				}
 				self.db.write(batch)?;
 			}
 		} else if self.db.key_may_exist_cf(self.cf_wait(), job_key) {
-			if let Ok(Some(job)) = self.get_job_waiting(queue_hash, job_id) {
+			if let Ok(Some(job)) = self.get_job_waiting(queue_name, job_id) {
 				let mut batch = WriteBatch::default();
 				batch.delete_cf(self.cf_wait(), job_key);
 				if job.state.delay_ts > 0 {
 					batch.delete_cf(
 						self.cf_time_sched(),
-						TimeKey::new(job.state.delay_ts, job_key),
+						TimeKey::bytes_from(job.state.delay_ts, job_key),
 					);
 				}
 				self.db.write(batch)?;
 			}
 		} else if self.db.key_may_exist_cf(self.cf_fin(), job_key) {
-			if let Ok(Some(job)) = self.get_job_completed(queue_hash, job_id) {
+			if let Ok(Some(job)) = self.get_job_completed(queue_name, job_id) {
 				let mut batch = WriteBatch::default();
 				batch.delete_cf(self.cf_fin(), job_key);
 				if job.state.retention_ts > 0 {
 					batch.delete_cf(
 						self.cf_time_exp(),
-						TimeKey::new(job.state.retention_ts, job_key),
+						TimeKey::bytes_from(job.state.retention_ts, job_key),
 					);
 				} else {
 					warn!("Job completed in store without retention: {:?}", job_id)
@@ -266,8 +270,8 @@ impl WorkQueueBackend for RocksBackend {
 
 			let job_key = &tkey.job_key;
 
-			if let Ok(Some(job)) = self.get_job_waiting(job_key.queue_hash, job_key.job_id) {
-				q.inner_put(job_key.queue_hash, job)?;
+			if let Ok(Some(job)) = self.get_job_waiting(&job_key.queue_name, job_key.job_id) {
+				q.inner_put(job_key.queue_name.clone(), job)?;
 			} else {
 				warn!("Scheduled job not found in wait area: {}", tkey);
 			}
@@ -295,7 +299,7 @@ impl WorkQueueBackend for RocksBackend {
 
 			if CF_RUN == target_cf {
 				if let Ok(Some(mut job)) =
-					self.get_job_running(job_key.queue_hash, job_key.job_id)
+					self.get_job_running(&job_key.queue_name, job_key.job_id)
 				{
 					debug!("ttr evict {:?}", job_key);
 
@@ -307,12 +311,12 @@ impl WorkQueueBackend for RocksBackend {
 					if job.options.max_retries > job.state.retries_count {
 						job.state.retries_count += 1;
 						// TODO with delay
-						q.inner_put(job_key.queue_hash, job)?;
+						q.inner_put(job_key.queue_name.clone(), job)?;
 					} else {
 						// job reached max retries
 						job.state.status = JobStatus::ERR;
 						job.state.outcome = Some("Reached max retries".into());
-						self.complete_job(job_key.queue_hash, &job)?;
+						self.complete_job(&job_key.queue_name, &job)?;
 					}
 				}
 			} else if CF_FIN == target_cf && self.db.key_may_exist_cf(self.cf_fin(), job_key) {
@@ -327,9 +331,9 @@ impl WorkQueueBackend for RocksBackend {
 		Ok(None)
 	}
 
-	fn peek_job(&self, queue_hash: u32) -> QResult<Vec<Job>> {
+	fn peek_job(&self, queue_name: &QueueName) -> QResult<Vec<Job>> {
 		let mut readopts = ReadOptions::default();
-		readopts.set_iterate_lower_bound(queue_hash.to_be_bytes());
+		readopts.set_iterate_lower_bound(queue_name.bytes);
 		readopts.set_prefix_same_as_start(true);
 
 		let items =
@@ -343,28 +347,28 @@ impl WorkQueueBackend for RocksBackend {
 		Ok(keys)
 	}
 
-	fn get_job_running(&self, queue_hash: u32, job_id: u64) -> QResult<Option<Job>> {
-		self.get_job(self.cf_run(), queue_hash, job_id)
+	fn get_job_running(&self, queue_name: &QueueName, job_id: u64) -> QResult<Option<Job>> {
+		self.get_job(self.cf_run(), queue_name, job_id)
 	}
 
-	fn get_job_completed(&self, queue_hash: u32, job_id: u64) -> QResult<Option<Job>> {
-		self.get_job(self.cf_fin(), queue_hash, job_id)
+	fn get_job_completed(&self, queue_name: &QueueName, job_id: u64) -> QResult<Option<Job>> {
+		self.get_job(self.cf_fin(), queue_name, job_id)
 	}
 
-	fn get_job_waiting(&self, queue_hash: u32, job_id: u64) -> QResult<Option<Job>> {
-		self.get_job(self.cf_wait(), queue_hash, job_id)
+	fn get_job_waiting(&self, queue_name: &QueueName, job_id: u64) -> QResult<Option<Job>> {
+		self.get_job(self.cf_wait(), queue_name, job_id)
 	}
 
-	fn touch_job(&self, queue_hash: u32, job_id: u64) -> QResult<()> {
-		if let Ok(Some(mut job)) = self.get_job_running(queue_hash, job_id) {
+	fn touch_job(&self, queue_name: &QueueName, job_id: u64) -> QResult<()> {
+		if let Ok(Some(mut job)) = self.get_job_running(queue_name, job_id) {
 			if job.state.ttr_ts > 0 {
 				let cf_run = self.cf_run();
 				let cf_exp = self.cf_time_exp();
 
-				let job_key = &JobKey::new(queue_hash, job_id);
-				let prev_tkey = TimeKey::new(job.state.ttr_ts, job_key);
+				let job_key = &JobKey::bytes_from(queue_name, job_id);
+				let prev_tkey = TimeKey::bytes_from(job.state.ttr_ts, job_key);
 				let ttr = unix_millis() + job.options.ttr as u64;
-				let tkey = TimeKey::new(ttr, job_key);
+				let tkey = TimeKey::bytes_from(ttr, job_key);
 
 				let mut batch = WriteBatch::default();
 				batch.delete_cf(cf_exp, prev_tkey);
@@ -397,26 +401,26 @@ impl WorkQueueBackend for RocksBackend {
 		info!("RocksDB: end");
 	}
 
-	fn update_job(&self, queue_hash: u32, job: &Job) -> QResult<()> {
+	fn update_job(&self, queue_name: &QueueName, job: &Job) -> QResult<()> {
 		let job_id = job.id.unwrap();
-		let job_key = &JobKey::new(queue_hash, job_id);
-		let db_key = job_key;
+		let job_key = &JobKey::bytes_from(queue_name, job_id);
 
 		let mut batch = WriteBatch::default();
-		batch.delete_cf(self.cf_run(), db_key);
-		batch.put_cf(self.cf_run(), db_key, self.serialize(job));
+		batch.delete_cf(self.cf_run(), job_key);
+		batch.put_cf(self.cf_run(), job_key, self.serialize(job));
 		self.db.write(batch)?;
 
-		self.touch_job(queue_hash, job_id)
+		self.touch_job(queue_name, job_id)
 	}
 
-	fn complete_job(&self, queue_hash: u32, job: &Job) -> QResult<()> {
-		let job_key = &JobKey::new(queue_hash, job.id.unwrap());
+	fn complete_job(&self, queue_name: &QueueName, job: &Job) -> QResult<()> {
+		let job_key = &JobKey::bytes_from(queue_name, job.id.unwrap());
 
 		let mut batch = WriteBatch::default();
 		batch.delete_cf(self.cf_run(), job_key);
 		if job.state.ttr_ts > 0 {
-			batch.delete_cf(self.cf_time_exp(), TimeKey::new(job.state.ttr_ts, job_key));
+			batch
+				.delete_cf(self.cf_time_exp(), TimeKey::bytes_from(job.state.ttr_ts, job_key));
 		}
 		if job.options.retention > 0 {
 			let mut job = job.clone();
@@ -424,7 +428,7 @@ impl WorkQueueBackend for RocksBackend {
 
 			batch.put_cf(
 				self.cf_time_exp(),
-				TimeKey::new(job.state.retention_ts, job_key),
+				TimeKey::bytes_from(job.state.retention_ts, job_key),
 				CF_FIN,
 			);
 			batch.put_cf(self.cf_fin(), job_key, self.serialize(&job));
@@ -437,8 +441,8 @@ impl WorkQueueBackend for RocksBackend {
 
 #[derive(Debug, Clone)]
 struct JobKey {
-	/// Hash of the queue name
-	queue_hash: u32,
+	/// Queue name
+	queue_name: QueueName,
 	/// Job identifier
 	job_id: u64,
 	///
@@ -446,31 +450,26 @@ struct JobKey {
 }
 
 impl JobKey {
-	fn new(queue_hash: u32, job_id: u64) -> Self {
-		Self { queue_hash, job_id, bytes: JobKey::bytes_from(queue_hash, job_id) }
-	}
-
-	fn bytes_from(queue_hash: u32, job_id: u64) -> Bytes {
+	fn bytes_from(queue_name: &QueueName, job_id: u64) -> Bytes {
 		let mut bytes = BytesMut::with_capacity(12);
-		bytes.put_u32(queue_hash);
+		bytes.put_slice(&queue_name.bytes);
 		bytes.put_u64(job_id);
 		bytes.into()
 	}
 
-	fn queue_hash_from_key(key: &[u8]) -> u32 {
-		u32::from_be_bytes(key[..4].try_into().expect("queue name hash"))
+	fn queue_name_from_key(key: &[u8]) -> QueueName {
+		QueueName { bytes: key[..32].try_into().expect("queue name hash") }
 	}
 }
 
 impl From<&[u8]> for JobKey {
 	fn from(key_bytes: &[u8]) -> Self {
-		let queue_hash =
-			u32::from_be_bytes(key_bytes.get(..4).expect("queue name").try_into().unwrap());
+		let queue_name = key_bytes.get(..32).expect("queue name").try_into().unwrap();
 		let job_id = u64::from_be_bytes(
-			key_bytes.get(4..).expect("job key in the rest").try_into().unwrap(),
+			key_bytes.get(32..).expect("job key in the rest").try_into().unwrap(),
 		);
 
-		Self { queue_hash, job_id, bytes: Bytes::from(key_bytes.to_vec()) }
+		Self { queue_name, job_id, bytes: Bytes::from(key_bytes.to_vec()) }
 	}
 }
 
@@ -497,23 +496,22 @@ impl TimeKey {
 		);
 		let job_key = &JobKey::from(key.get(8..).unwrap());
 
-		Self::new(time, job_key)
+		Self {
+			time,
+			job_key: job_key.clone(),
+			bytes: TimeKey::bytes_from(time, &job_key.bytes),
+		}
 	}
 
-	fn bytes_from(time: u64, job_key: &JobKey) -> Bytes {
+	fn bytes_from(time: u64, job_key: &Bytes) -> Bytes {
 		let mut bytes = BytesMut::with_capacity(20);
 		bytes.put_u64(time);
-		bytes.put_u32(job_key.queue_hash);
-		bytes.put_u64(job_key.job_id);
+		bytes.put_slice(job_key);
 		bytes.into()
 	}
 
 	fn to_bytes(&self) -> &Bytes {
 		&self.bytes
-	}
-
-	fn new(time: u64, job_key: &JobKey) -> TimeKey {
-		Self { time, job_key: job_key.clone(), bytes: TimeKey::bytes_from(time, job_key) }
 	}
 }
 

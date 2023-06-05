@@ -76,3 +76,22 @@ impl Default for JobState {
 		}
 	}
 }
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct QueueName {
+	pub bytes: [u8; 32],
+}
+
+impl From<&str> for QueueName {
+	fn from(value: &str) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[..value.len()].copy_from_slice(value.as_bytes());
+		Self { bytes }
+	}
+}
+
+impl From<&[u8]> for QueueName {
+	fn from(value: &[u8]) -> Self {
+		Self { bytes: value.try_into().unwrap() }
+	}
+}

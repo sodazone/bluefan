@@ -45,14 +45,13 @@ use crossbeam::channel::{bounded, select, Receiver, Sender};
 use backend::InnerWorkQueue;
 use crossbeam::queue::SegQueue;
 use dashmap::{mapref::entry::Entry, DashMap};
-use fasthash::murmur;
 use jobs::JobState;
 use log::{debug, info, warn};
 
 use crate::{
 	backend::{self, WorkQueueBackend},
 	error::QResult,
-	jobs::{self, Job, JobStatus},
+	jobs::{self, Job, JobStatus, QueueName},
 	rocks::RocksBackend,
 	unix_millis, unix_secs,
 };
@@ -77,7 +76,7 @@ where
 	S: WorkQueueBackend,
 {
 	backend: S,
-	queues: DashMap<u32, SegQueue<Job>>,
+	queues: DashMap<QueueName, SegQueue<Job>>,
 	exp_next: AtomicU64,
 	exp_chan: (Sender<bool>, Receiver<bool>),
 	sched_next: AtomicU64,
@@ -109,7 +108,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 
 	/// Returns the number of jobs waiting in a in-memory queue.
 	pub fn queue_len(&self, queue_name: &str) -> u64 {
-		if let Some(queue) = self.queues.get(&hash(queue_name)) {
+		if let Some(queue) = self.queues.get(&queue_name.into()) {
 			queue.len() as u64
 		} else {
 			0
@@ -133,7 +132,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 			if options.delay > 0 { unix_millis() + options.delay as u64 } else { 0 };
 
 		self.inner_put(
-			hash(queue_name),
+			queue_name.into(),
 			Job {
 				id: Some(id),
 				attachment: job.attachment.clone(),
@@ -158,7 +157,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<Option<Job>>`: A result that contains an `Option` wrapping the running job, or `None` if the job is not found.
 	///   The result can also indicate any potential errors that may occur during the operation.
 	pub fn get_running(&self, queue_name: &str, job_id: u64) -> QResult<Option<Job>> {
-		self.backend.get_job_running(hash(queue_name), job_id)
+		self.backend.get_job_running(&queue_name.into(), job_id)
 	}
 
 	/// Retrieves a completed job from a queue.
@@ -174,7 +173,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<Option<Job>>`: A result that contains an `Option` wrapping the completed job, or `None` if the job is not found.
 	///   The result can also indicate any potential errors that may occur during the operation.
 	pub fn get_completed(&self, queue_name: &str, job_id: u64) -> QResult<Option<Job>> {
-		self.backend.get_job_completed(hash(queue_name), job_id)
+		self.backend.get_job_completed(&queue_name.into(), job_id)
 	}
 
 	/// Marks a job as successfully completed.
@@ -200,7 +199,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 			job.state.status = JobStatus::OK;
 			job.state.outcome = outcome;
 
-			self.backend.complete_job(hash(queue_name), &job)
+			self.backend.complete_job(&queue_name.into(), &job)
 		} else {
 			Ok(())
 		}
@@ -229,7 +228,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 			job.state.status = JobStatus::ERR;
 			job.state.outcome = outcome;
 
-			self.backend.complete_job(hash(queue_name), &job)
+			self.backend.complete_job(&queue_name.into(), &job)
 		} else {
 			Ok(())
 		}
@@ -257,7 +256,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	) -> QResult<()> {
 		if let Ok(Some(mut job)) = self.get_running(queue_name, job_id) {
 			job.state.intermediate = intermediate;
-			self.backend.update_job(hash(queue_name), &job)
+			self.backend.update_job(&queue_name.into(), &job)
 		} else {
 			Ok(())
 		}
@@ -276,7 +275,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<()>`: A result indicating the success or failure of the delete operation.
 	///   It returns `Ok(())` if the job is successfully deleted, or an error if the operation fails.
 	pub fn delete(&self, queue_name: &str, job_id: u64) -> QResult<()> {
-		self.backend.delete_job(hash(queue_name), job_id)
+		self.backend.delete_job(&queue_name.into(), job_id)
 	}
 
 	/// Receive and delete.
@@ -291,9 +290,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<Option<Job>>`: A result that contains an `Option` wrapping the received job, or `None` if the queue is empty.
 	///   The result can also indicate any potential errors that may occur during the operation.
 	pub fn recv_and_delete(&self, queue_name: &str) -> QResult<Option<Job>> {
-		let queue_hash = &hash(queue_name);
-
-		if let Some(q) = self.queues.get(queue_hash) {
+		if let Some(q) = self.queues.get(&queue_name.into()) {
 			match q.pop() {
 				Some(job) => {
 					let job_id = job.id.unwrap();
@@ -355,9 +352,9 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<Option<Job>>`: A result that contains an `Option` wrapping the leased job, or `None` if no job is available.
 	///   The result can also indicate any potential errors that may occur during the operation.
 	pub fn lease_with_time(&self, queue_name: &str, ttr: Option<u32>) -> QResult<Option<Job>> {
-		let queue_hash = hash(queue_name);
+		let qn = &queue_name.into();
 
-		if let Some(q) = self.queues.get(&queue_hash) {
+		if let Some(q) = self.queues.get(qn) {
 			q.pop()
 				.map(|mut job| {
 					job.options.ttr = ttr.unwrap_or(job.options.ttr);
@@ -366,14 +363,14 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 						job.state.status = JobStatus::RUNNING;
 						let ttr = unix_millis() + job.options.ttr as u64;
 						job.state.ttr_ts = ttr;
-						self.backend.claim_job(queue_hash, &job)?;
+						self.backend.claim_job(qn, &job)?;
 						self.sched_ttr(ttr);
 
 						Ok(Some(job))
 					} else {
 						job.state.status = JobStatus::OK;
 						if job.options.durable {
-							self.backend.delete_job(queue_hash, job.id.unwrap())?;
+							self.backend.delete_job(qn, job.id.unwrap())?;
 						}
 						Ok(Some(job))
 					}
@@ -396,10 +393,10 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<()>`: A result indicating the success or failure of the release operation.
 	///   It returns `Ok(())` if the job is successfully released, or an error if the operation fails.
 	pub fn release(&self, queue_name: &str, job_id: u64) -> QResult<u64> {
-		let queue_hash = hash(queue_name);
+		let qn = queue_name.into();
 
-		match self.backend.release_job(queue_hash, job_id) {
-			Ok(job) => self.inner_put(queue_hash, job),
+		match self.backend.release_job(&qn, job_id) {
+			Ok(job) => self.inner_put(qn, job),
 			Err(error) => Err(error),
 		}
 	}
@@ -416,7 +413,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<Vec<Job>>`: A result that contains a vector of `Job` objects representing the waiting jobs.
 	///   The result can also indicate any potential errors that may occur during the operation.
 	pub fn peek(&self, queue_name: &str) -> QResult<Vec<Job>> {
-		self.backend.peek_job(hash(queue_name))
+		self.backend.peek_job(&queue_name.into())
 	}
 
 	/// Extends the time to run of a leased job.
@@ -432,7 +429,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	/// - `QResult<()>`: A result indicating the success or failure of extending the time to run for the job.
 	///   It returns `Ok(())` if the time to run is successfully extended, or an error if the operation fails.
 	pub fn touch(&self, queue_name: &str, job_id: u64) -> QResult<()> {
-		self.backend.touch_job(hash(queue_name), job_id)?;
+		self.backend.touch_job(&queue_name.into(), job_id)?;
 		self.notify_ttr();
 
 		Ok(())
@@ -524,11 +521,11 @@ impl<S: WorkQueueBackend> InnerWorkQueue for WorkQueue<S> {
 	/// - `QResult<u64>`: A result indicating the success or failure of putting the job into the queue.
 	///   It returns `Ok(job_id)` if the job is successfully put into the queue, where `job_id` represents the ID of the job,
 	///   or an error if the operation fails.
-	fn inner_put(&self, queue_hash: u32, job: Job) -> QResult<u64> {
+	fn inner_put(&self, queue_name: QueueName, job: Job) -> QResult<u64> {
 		let job_id = job.id.expect("job with id");
 
 		if job.options.durable {
-			self.backend.put_job(queue_hash, &job)?;
+			self.backend.put_job(&queue_name, &job)?;
 		}
 
 		if job.options.delay > 0
@@ -537,7 +534,7 @@ impl<S: WorkQueueBackend> InnerWorkQueue for WorkQueue<S> {
 			self.sched_next.store(job.state.delay_ts, Ordering::Relaxed);
 			self.notify_scheduled();
 		} else {
-			match self.queues.entry(queue_hash) {
+			match self.queues.entry(queue_name) {
 				Entry::Occupied(occuppied) => {
 					let q = occuppied.get();
 					q.push(job);
@@ -622,10 +619,6 @@ impl<S: WorkQueueBackend> Drop for WorkQueueService<S> {
 
 		self.q.stop();
 	}
-}
-
-fn hash(str: &str) -> u32 {
-	murmur::hash32(str)
 }
 
 /// RocksDB backed [WorkQueue].
