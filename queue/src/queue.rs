@@ -521,7 +521,7 @@ impl<S: WorkQueueBackend> InnerWorkQueue for WorkQueue<S> {
 	/// - Durable persistence
 	///
 	/// Parameters:
-	/// - `queue_hash`: An unsigned 32-bit integer representing the hash of the queue.
+	/// - `queue_name`: The queue name.
 	/// - `job`: The job to be put into the queue.
 	///
 	/// Returns:
