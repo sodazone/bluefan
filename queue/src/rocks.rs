@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::backend::{InnerWorkQueue, WorkQueueBackend};
 use crate::error::{QError, QResult};
-use crate::jobs::{Job, JobStatus, QueueName};
+use crate::jobs::{Job, JobStatus, QueueName, QUEUE_NAME_LEN};
 use crate::unix_millis;
 
 const CF_WAIT: &str = "w";
@@ -48,8 +48,7 @@ impl RocksBackend {
 				tableopts.set_index_type(rocksdb::BlockBasedIndexType::HashSearch);
 
 				let mut prefixopts = Options::default();
-				// 4-bytes queue hash prefix
-				prefixopts.set_prefix_extractor(SliceTransform::create_fixed_prefix(4));
+				prefixopts.set_prefix_extractor(SliceTransform::create_fixed_prefix(QUEUE_NAME_LEN));
 				prefixopts.set_block_based_table_factory(&tableopts);
 				prefixopts.set_memtable_prefix_bloom_ratio(0.2);
 
