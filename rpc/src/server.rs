@@ -15,7 +15,7 @@ use crate::protocol::QueueRpc;
 #[derive(Parser)]
 #[command(name = "Bluefan RPC Server")]
 #[command(author = "soda <projects@soda.zone>")]
-#[command(version = "1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Bluefan RPC Work Queue Server", long_about = None)]
 #[command(next_line_help = true)]
 struct Cli {
