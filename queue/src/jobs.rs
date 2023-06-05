@@ -81,12 +81,12 @@ pub const QUEUE_NAME_LEN: usize = 32;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct QueueName {
-	pub bytes: [u8; 32],
+	pub bytes: [u8; QUEUE_NAME_LEN],
 }
 
 impl From<&str> for QueueName {
 	fn from(value: &str) -> Self {
-		let mut bytes = [0u8; 32];
+		let mut bytes = [0u8; QUEUE_NAME_LEN];
 		bytes[..value.len()].copy_from_slice(value.as_bytes());
 		Self { bytes }
 	}
