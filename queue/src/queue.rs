@@ -367,7 +367,7 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 					job.options.ttr = ttr.unwrap_or(job.options.ttr);
 
 					if job.options.ttr > 0 {
-						job.state.status = JobStatus::RUNNING;
+						job.state.status = JobStatus::RUN;
 						let ttr = unix_millis() + job.options.ttr as u64;
 						job.state.ttr_ts = ttr;
 						self.backend.claim_job(qn, &job)?;

@@ -4,10 +4,10 @@ package bluefan.queue;
 
 enum JobStatus {
   NONE = 0;
-	WAIT = 1;
-	RUNNING = 2;
-	OK = 3;
-	ERR = 4;
+  WAIT = 1;
+  RUN = 2;
+  OK = 3;
+  ERR = 4;
 }
 
 //

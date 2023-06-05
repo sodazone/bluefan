@@ -21,7 +21,7 @@ pub struct Job {
 pub enum JobStatus {
 	NONE = 0,
 	WAIT = 1,
-	RUNNING = 2,
+	RUN = 2,
 	OK = 3,
 	ERR = 4,
 }

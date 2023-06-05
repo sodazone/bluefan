@@ -48,7 +48,8 @@ impl RocksBackend {
 				tableopts.set_index_type(rocksdb::BlockBasedIndexType::HashSearch);
 
 				let mut prefixopts = Options::default();
-				prefixopts.set_prefix_extractor(SliceTransform::create_fixed_prefix(QUEUE_NAME_LEN));
+				let prefix_extractor = SliceTransform::create_fixed_prefix(QUEUE_NAME_LEN);
+				prefixopts.set_prefix_extractor(prefix_extractor);
 				prefixopts.set_block_based_table_factory(&tableopts);
 				prefixopts.set_memtable_prefix_bloom_ratio(0.2);
 
