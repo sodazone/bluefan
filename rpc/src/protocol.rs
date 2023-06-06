@@ -7,7 +7,7 @@ use bluefan_rpc::queue_server::Queue;
 use bluefan_rpc::{JobValue, LeaseRequest, PutRequest, PutResponse};
 
 pub mod bluefan_rpc {
-	tonic::include_proto!("bluefan.queue");
+	tonic::include_proto!("bluefan");
 }
 
 /// Converts a `Job` into a `JobValue`.
