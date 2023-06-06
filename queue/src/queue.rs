@@ -126,17 +126,17 @@ impl<S: WorkQueueBackend> WorkQueue<S> {
 	///   If a job ID is not provided, a new ID will be generated for the job.
 	///   The result can also indicate any potential errors that may occur during the operation.
 	pub fn put(&self, queue_name: &str, job: &Job) -> QResult<u64> {
-		let id = job.id.unwrap_or(self.gen_id());
-		let options = job.options.clone();
-		let delay_ts =
-			if options.delay > 0 { unix_millis() + options.delay as u64 } else { 0 };
-
 		if queue_name.len() > QUEUE_NAME_LEN {
 			return Err(QError::QueueError(format!(
 				"the maximum queue name length is {} bytes",
 				QUEUE_NAME_LEN
 			)));
 		}
+		
+		let id = job.id.unwrap_or(self.gen_id());
+		let options = job.options.clone();
+		let delay_ts =
+			if options.delay > 0 { unix_millis() + options.delay as u64 } else { 0 };
 
 		self.inner_put(
 			queue_name.into(),
