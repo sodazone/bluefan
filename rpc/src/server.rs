@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use bluefan_queue::RocksWorkQueueService;
 use clap::{Parser, ValueHint};
+use env_logger::Env;
 use log::info;
 use tonic::transport::Server;
 
@@ -30,7 +31,11 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	env_logger::init();
+	let env = Env::default()
+		.filter_or("BLUEFAN_LOG_LEVEL", "info")
+		.write_style_or("BLUEFAN_LOG_STYLE", "always");
+
+	env_logger::init_from_env(env);
 
 	let cli = Cli::parse();
 
