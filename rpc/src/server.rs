@@ -1,5 +1,5 @@
 //! # Bluefan gRPC Server
-//! 
+//!
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -36,10 +36,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	info!("gRPC server listening on {}", cli.addr);
 
+	let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+	health_reporter.set_serving::<QueueServer<QueueRpc>>().await;
+
 	let queue_service = RocksWorkQueueService::new(cli.db.to_str().unwrap());
 	let rpc = QueueRpc::new(queue_service);
 
-	Server::builder().add_service(QueueServer::new(rpc)).serve(cli.addr).await?;
+	Server::builder()
+		.add_service(health_service)
+		.add_service(QueueServer::new(rpc))
+		.serve(cli.addr)
+		.await?;
 
 	Ok(())
 }
